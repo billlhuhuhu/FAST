@@ -1,0 +1,8 @@
+{
+  "method": "fast",
+  "dataset": "CIFAR-10",
+  "keep_ratio": 0.1,
+  "backbone": "ResNet18",
+  "mean_accuracy": 0.8123,
+  "std_accuracy": 0.0045
+}

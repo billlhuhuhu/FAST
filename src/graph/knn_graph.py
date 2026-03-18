@@ -1,16 +1,15 @@
 """Multi-scale kNN graph construction utilities for the FAST scaffold.
 
-This module implements a clear, correctness-first version of a multi-scale
-fuzzy kNN graph:
+This module implements a correctness-first version of the graph construction
+pipeline described around FAST Section 3.1:
 
-1. build kNN neighborhoods for each ``k`` in ``k_list``,
-2. estimate local smoothing parameters ``rho_i`` and ``sigma_i``,
-3. construct directed fuzzy adjacency matrices,
-4. apply fuzzy union symmetrization,
-5. fuse multiple scales,
-6. add minimum spanning tree (MST) edges for connectivity.
-
-The implementation intentionally prioritizes readability over speed.
+1. build kNN neighborhoods for each ``k`` in ``k_list``;
+2. estimate local connectivity offsets ``rho_i`` and smooth scales ``sigma_i``;
+3. build a directed fuzzy graph per scale;
+4. apply scale-wise fuzzy union ``A + A^T - A * A^T``;
+5. fuse multiple scales with another fuzzy union pass;
+6. add MST edges to improve connectivity;
+7. expose graph statistics for debugging.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from typing import Dict, Sequence, Union
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.csgraph import minimum_spanning_tree
+from scipy.sparse.csgraph import connected_components, minimum_spanning_tree
 from sklearn.metrics import pairwise_distances
 from sklearn.neighbors import NearestNeighbors
 
@@ -52,6 +51,8 @@ class KnnGraph:
             Local connectivity offsets with shape ``[N]``.
         sigma:
             Local smoothing scales with shape ``[N]``.
+        stats:
+            Graph statistics dictionary for this scale.
     """
 
     indices: np.ndarray
@@ -60,6 +61,7 @@ class KnnGraph:
     adjacency: sp.csr_matrix
     rho: np.ndarray
     sigma: np.ndarray
+    stats: Dict[str, float | int]
 
 
 @dataclass
@@ -75,12 +77,15 @@ class MultiScaleKnnGraph:
             Symmetric MST edge graph in CSR format with shape ``[N, N]``.
         combined_graph:
             Final graph after merging the fused graph with MST edges.
+        stats:
+            Statistics dictionary for fused/MST/final graph structure.
     """
 
     scale_graphs: Dict[int, KnnGraph]
     fused_graph: sp.csr_matrix
     mst_graph: sp.csr_matrix
     combined_graph: sp.csr_matrix
+    stats: Dict[str, float | int]
 
 
 def to_numpy_2d(X: ArrayLike2D) -> np.ndarray:
@@ -130,7 +135,7 @@ def compute_knn_neighbors(X: ArrayLike2D, k: int) -> tuple[np.ndarray, np.ndarra
             Number of neighbors per point.
 
     Returns:
-        A tuple ``(indices, distances)`` where both arrays have shape ``[N, k]``.
+        A tuple ``(indices, distances)`` where both arrays have shape ``[N, k_eff]``.
     """
 
     if k <= 0:
@@ -153,23 +158,44 @@ def compute_knn_neighbors(X: ArrayLike2D, k: int) -> tuple[np.ndarray, np.ndarra
     return indices, distances
 
 
-def compute_rho(distances: np.ndarray) -> np.ndarray:
+def compute_rho(distances: np.ndarray, zero_tol: float = 1e-12) -> np.ndarray:
     """Compute local connectivity offsets ``rho_i``.
+
+    ``rho_i`` is the first non-zero neighbor distance for point ``i``. When all
+    neighbor distances are effectively zero, the offset falls back to ``0``.
 
     Args:
         distances:
             Neighbor distances with shape ``[N, k]``.
+        zero_tol:
+            Threshold for treating a distance as zero.
 
     Returns:
-        Array with shape ``[N]`` where each entry is the first non-zero neighbor
-        distance. If all neighbor distances are zero, ``rho_i`` is set to ``0``.
+        Array with shape ``[N]``.
     """
+
+    if distances.ndim != 2:
+        raise ValueError("distances must have shape [N, k]")
 
     rho = np.zeros(distances.shape[0], dtype=np.float64)
     for i in range(distances.shape[0]):
-        positive = distances[i][distances[i] > 0.0]
+        row = np.asarray(distances[i], dtype=np.float64)
+        positive = row[row > zero_tol]
         rho[i] = float(positive[0]) if positive.size > 0 else 0.0
     return rho
+
+
+def _membership_sum_for_sigma(row_distances: np.ndarray, rho_i: float, sigma_value: float) -> float:
+    """Compute the smooth-kNN membership sum for a single row and sigma."""
+
+    adjusted = row_distances - rho_i
+    if sigma_value <= 1e-12:
+        return float(np.sum(adjusted <= 0.0))
+
+    positive = np.maximum(adjusted, 0.0)
+    memberships = np.exp(-positive / sigma_value)
+    memberships[adjusted <= 0.0] = 1.0
+    return float(np.sum(memberships))
 
 
 def solve_sigmas(
@@ -178,12 +204,13 @@ def solve_sigmas(
     target: float | None = None,
     n_iter: int = 64,
     tol: float = 1e-5,
+    min_sigma: float = 1e-3,
 ) -> np.ndarray:
-    """Estimate local smoothing scales ``sigma_i`` using binary search.
+    """Estimate local smoothing scales ``sigma_i`` using a stable binary search.
 
-    The solver follows the UMAP-style smooth-kNN idea: for each point ``i``,
-    find ``sigma_i`` such that the local membership strengths approximately sum
-    to a target value.
+    The solver follows the smooth-kNN idea used in topology-aware fuzzy graphs:
+    for each point ``i``, find ``sigma_i`` such that the local membership mass
+    approximately matches ``target``.
 
     Args:
         distances:
@@ -196,38 +223,44 @@ def solve_sigmas(
             Number of binary-search iterations.
         tol:
             Tolerance for the target match.
+        min_sigma:
+            Lower bound used for numerical stability.
 
     Returns:
         Array with shape ``[N]``.
     """
 
     num_nodes, num_neighbors = distances.shape
+    if rho.shape[0] != num_nodes:
+        raise ValueError("rho must have shape [N]")
     if target is None:
         target = np.log2(max(num_neighbors, 1) + 1.0)
 
+    positive_distances = distances[distances > 1e-12]
+    global_scale = float(np.median(positive_distances)) if positive_distances.size > 0 else 1.0
+    global_scale = max(global_scale, min_sigma)
+
     sigmas = np.zeros(num_nodes, dtype=np.float64)
     for i in range(num_nodes):
+        row = np.asarray(distances[i], dtype=np.float64)
+        if row.size == 0:
+            sigmas[i] = global_scale
+            continue
+
         lo = 0.0
-        hi = 1.0
+        hi = max(global_scale, np.max(np.maximum(row - rho[i], 0.0)) + global_scale)
+        hi = max(hi, min_sigma)
 
-        def membership_sum(sigma_value: float) -> float:
-            total = 0.0
-            for d in distances[i]:
-                adjusted = d - rho[i]
-                if adjusted <= 0.0:
-                    total += 1.0
-                elif sigma_value <= 1e-12:
-                    total += 0.0
-                else:
-                    total += np.exp(-adjusted / sigma_value)
-            return total
-
-        while membership_sum(hi) < target and hi < 1e6:
+        current = _membership_sum_for_sigma(row, rho[i], hi)
+        expand_steps = 0
+        while current < target and expand_steps < 32:
             hi *= 2.0
+            current = _membership_sum_for_sigma(row, rho[i], hi)
+            expand_steps += 1
 
         for _ in range(n_iter):
             mid = 0.5 * (lo + hi)
-            value = membership_sum(mid)
+            value = _membership_sum_for_sigma(row, rho[i], mid)
             if abs(value - target) <= tol:
                 lo = mid
                 hi = mid
@@ -237,10 +270,10 @@ def solve_sigmas(
             else:
                 hi = mid
 
-        sigma = 0.5 * (lo + hi)
-        if not np.isfinite(sigma) or sigma <= 0.0:
-            sigma = 1e-3
-        sigmas[i] = sigma
+        sigma_i = 0.5 * (lo + hi)
+        if not np.isfinite(sigma_i) or sigma_i <= 0.0:
+            sigma_i = global_scale
+        sigmas[i] = max(float(sigma_i), min_sigma)
 
     return sigmas
 
@@ -265,14 +298,17 @@ def compute_membership_weights(
     """
 
     num_nodes, num_neighbors = distances.shape
+    if rho.shape[0] != num_nodes or sigma.shape[0] != num_nodes:
+        raise ValueError("rho and sigma must both have shape [N]")
+
     weights = np.zeros((num_nodes, num_neighbors), dtype=np.float64)
     for i in range(num_nodes):
-        for j in range(num_neighbors):
-            adjusted = distances[i, j] - rho[i]
-            if adjusted <= 0.0:
-                weights[i, j] = 1.0
-            else:
-                weights[i, j] = np.exp(-adjusted / max(sigma[i], 1e-12))
+        adjusted = distances[i] - rho[i]
+        positive = np.maximum(adjusted, 0.0)
+        sigma_i = max(float(sigma[i]), 1e-12)
+        row_weights = np.exp(-positive / sigma_i)
+        row_weights[adjusted <= 0.0] = 1.0
+        weights[i] = np.clip(row_weights, 0.0, 1.0)
     return weights
 
 
@@ -295,10 +331,14 @@ def build_directed_adjacency(
         CSR sparse matrix with shape ``[N, N]``.
     """
 
+    if indices.shape != weights.shape:
+        raise ValueError("indices and weights must share shape [N, k]")
+
     row_ids = np.repeat(np.arange(num_nodes, dtype=np.int64), indices.shape[1])
     col_ids = indices.reshape(-1)
     data = weights.reshape(-1)
     adjacency = sp.csr_matrix((data, (row_ids, col_ids)), shape=(num_nodes, num_nodes))
+    adjacency.data = np.clip(adjacency.data, 0.0, 1.0)
     adjacency.eliminate_zeros()
     return adjacency
 
@@ -320,13 +360,63 @@ def fuzzy_union_symmetric(adjacency: sp.spmatrix) -> sp.csr_matrix:
         Symmetric CSR sparse matrix with shape ``[N, N]``.
     """
 
-    adjacency = adjacency.tocsr()
+    adjacency = adjacency.tocsr().astype(np.float64)
     transpose = adjacency.T.tocsr()
     sym = adjacency + transpose - adjacency.multiply(transpose)
+    sym = 0.5 * (sym + sym.T)
     sym = sym.tocsr()
     sym.data = np.clip(sym.data, 0.0, 1.0)
     sym.eliminate_zeros()
     return sym
+
+
+def _count_undirected_edges(graph: sp.csr_matrix) -> int:
+    """Count undirected edges of a symmetric sparse graph."""
+
+    graph = graph.tocsr()
+    off_diagonal = graph.tocoo()
+    mask = off_diagonal.row < off_diagonal.col
+    return int(np.sum(mask))
+
+
+def compute_graph_statistics(graph: sp.spmatrix, mst_graph: sp.spmatrix | None = None) -> Dict[str, float | int]:
+    """Compute lightweight graph statistics.
+
+    Args:
+        graph:
+            Symmetric sparse graph with shape ``[N, N]``.
+        mst_graph:
+            Optional MST graph used to compute usage statistics.
+
+    Returns:
+        Dictionary with edge count, connected components and degree summaries.
+    """
+
+    csr = graph.tocsr().astype(np.float64)
+    degree = np.asarray(csr.sum(axis=1)).reshape(-1)
+    components, _ = connected_components(csr, directed=False)
+
+    stats: Dict[str, float | int] = {
+        'num_nodes': int(csr.shape[0]),
+        'edge_count': _count_undirected_edges(csr),
+        'connected_components': int(components),
+        'degree_min': float(np.min(degree)) if degree.size > 0 else 0.0,
+        'degree_max': float(np.max(degree)) if degree.size > 0 else 0.0,
+        'degree_mean': float(np.mean(degree)) if degree.size > 0 else 0.0,
+        'degree_std': float(np.std(degree)) if degree.size > 0 else 0.0,
+    }
+
+    if mst_graph is not None:
+        mst_edges = max(_count_undirected_edges(mst_graph.tocsr()), 1)
+        fused_without_mst = csr.minimum(mst_graph.tocsr())
+        reused_edges = _count_undirected_edges(fused_without_mst)
+        added_edges = mst_edges - reused_edges
+        stats['mst_edge_count'] = int(mst_edges)
+        stats['mst_reused_edge_count'] = int(reused_edges)
+        stats['mst_added_edge_count'] = int(max(added_edges, 0))
+        stats['mst_edge_usage_ratio'] = float(max(added_edges, 0) / mst_edges)
+
+    return stats
 
 
 def build_single_scale_graph(X: ArrayLike2D, k: int) -> KnnGraph:
@@ -349,6 +439,8 @@ def build_single_scale_graph(X: ArrayLike2D, k: int) -> KnnGraph:
     weights = compute_membership_weights(distances, rho, sigma)
     directed = build_directed_adjacency(indices, weights, num_nodes=X_np.shape[0])
     adjacency = fuzzy_union_symmetric(directed)
+    stats = compute_graph_statistics(adjacency)
+    stats['k'] = int(k)
     return KnnGraph(
         indices=indices,
         distances=distances,
@@ -356,18 +448,15 @@ def build_single_scale_graph(X: ArrayLike2D, k: int) -> KnnGraph:
         adjacency=adjacency,
         rho=rho,
         sigma=sigma,
+        stats=stats,
     )
 
 
 def fuse_multiscale_graphs(scale_graphs: Dict[int, KnnGraph]) -> sp.csr_matrix:
     """Fuse multiple symmetric fuzzy graphs into one graph.
 
-    Args:
-        scale_graphs:
-            Mapping ``k -> KnnGraph``.
-
-    Returns:
-        Fused CSR sparse matrix with shape ``[N, N]``.
+    The fusion is also done with a fuzzy union operator so that combining scales
+    follows the same topology-preserving logic used inside each scale.
     """
 
     if not scale_graphs:
@@ -428,6 +517,9 @@ def add_mst_edges(graph: sp.spmatrix, mst_graph: sp.spmatrix) -> sp.csr_matrix:
     """
 
     combined = graph.tocsr().maximum(mst_graph.tocsr())
+    combined = 0.5 * (combined + combined.T)
+    combined = combined.tocsr()
+    combined.data = np.clip(combined.data, 0.0, 1.0)
     combined.eliminate_zeros()
     return combined
 
@@ -452,11 +544,17 @@ def build_multiscale_knn_graph(X: ArrayLike2D, k_list: Sequence[int]) -> MultiSc
     fused_graph = fuse_multiscale_graphs(scale_graphs)
     mst_graph = build_mst_graph(X)
     combined_graph = add_mst_edges(fused_graph, mst_graph)
+
+    stats = compute_graph_statistics(combined_graph, mst_graph=mst_graph)
+    stats['fused_edge_count'] = _count_undirected_edges(fused_graph)
+    stats['scale_count'] = int(len(scale_graphs))
+
     return MultiScaleKnnGraph(
         scale_graphs=scale_graphs,
         fused_graph=fused_graph,
         mst_graph=mst_graph,
         combined_graph=combined_graph,
+        stats=stats,
     )
 
 

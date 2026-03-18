@@ -1,0 +1,45 @@
+{
+  "train_logs": [
+    {
+      "epoch": 0,
+      "train_loss": 4.722673416137695,
+      "train_accuracy": 0.07692307692307693,
+      "num_samples": 26
+    }
+  ],
+  "eval_logs": [
+    {
+      "epoch": 0,
+      "loss": 60.24100875854492,
+      "accuracy": 0.0,
+      "num_samples": 16
+    }
+  ],
+  "test_accuracy": 0.0,
+  "test_loss": 60.24100875854492,
+  "best_accuracy": 0.0,
+  "best_epoch": 0,
+  "train_loss_summary": {
+    "first": 4.722673416137695,
+    "last": 4.722673416137695,
+    "min": 4.722673416137695,
+    "max": 4.722673416137695
+  },
+  "config_snapshot": {
+    "backbone": "resnet18",
+    "optimizer": "sgd",
+    "epochs": 1,
+    "batch_size": 16,
+    "lr": 0.1,
+    "momentum": 0.9,
+    "weight_decay": 0.0005,
+    "seed": 42,
+    "device": "cpu",
+    "selected_count": 26,
+    "extra_config": {
+      "ablation": "distribution_metric",
+      "metric": "kl"
+    }
+  },
+  "selected_count": 26
+}

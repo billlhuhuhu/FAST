@@ -1,0 +1,74 @@
+seed: 42
+device: cpu
+output_dir: ./outputs
+
+data:
+  root: ./data
+  dataset_name: cifar10
+  image_size: 32
+  num_classes: 10
+  flatten: true
+  pca_dim: 128
+  manifold_dim: 32
+
+coreset:
+  keep_ratio: 0.1
+  init_mode: random_subset
+
+graph:
+  k_list: [5, 10, 20]
+  sigma: 1.0
+  normalized_laplacian: true
+
+sampling:
+  num_frequencies: 64
+  pdas_frequencies_per_iter: 64
+  tau_start_ratio: 0.2
+  tau_end_ratio: 1.0
+  diversity_beta: 4.0
+  lcf_lambda_p: 0.5
+  lcf_alpha: 0.5
+  schedule_steps: 400
+  max_frequency_norm: 8.0
+  band_ranges:
+    low: [0.0, 2.5]
+    medium: [2.5, 5.0]
+    high: [5.0, 8.0]
+  band_sample_counts:
+    low: 22
+    medium: 21
+    high: 21
+  candidate_scales: [0.5, 1.0, 1.5, 2.0, 2.5]
+  scaling_search_steps: 5
+
+assignment:
+  mode: auto
+  prune_topk: 64
+  auto_threshold: 20000
+  large_cost_scale: 1000000.0
+  eps: 1.0e-8
+
+optimize:
+  steps: 400
+  iterations: 400
+  lr: 0.001
+  lambda_div: 0.1
+  lambda_align: 1.0
+  lambda_graph: 0.1
+  lambda_pdcfd: 1.0
+
+experiment:
+  method: fast
+  repeat: 1
+
+eval:
+  backbone: resnet18
+  optimizer: sgd
+  scheduler: none
+  scheduler_milestones: []
+  scheduler_gamma: 0.1
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 5.0e-4
+  epochs: 1
+  batch_size: 16

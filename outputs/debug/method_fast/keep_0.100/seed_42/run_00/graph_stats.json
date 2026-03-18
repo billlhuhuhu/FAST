@@ -1,0 +1,15 @@
+{
+  "num_nodes": 256,
+  "edge_count": 4024,
+  "connected_components": 1,
+  "degree_min": 6.4230483399305145,
+  "degree_max": 54.44834091377081,
+  "degree_mean": 15.555810597903118,
+  "degree_std": 8.020411414962535,
+  "mst_edge_count": 255,
+  "mst_reused_edge_count": 255,
+  "mst_added_edge_count": 0,
+  "mst_edge_usage_ratio": 0.0,
+  "fused_edge_count": 4024,
+  "scale_count": 3
+}

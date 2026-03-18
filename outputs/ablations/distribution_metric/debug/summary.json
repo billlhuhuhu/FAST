@@ -1,0 +1,232 @@
+{
+  "metrics": [
+    {
+      "metric": "mse",
+      "final_accuracy": 0.0,
+      "selected_count": 26,
+      "main_loss_summary": {
+        "first": 4.245055970386602e-05,
+        "last": 0.0031883413903415203,
+        "min": 4.245055970386602e-05,
+        "max": 0.0031883413903415203
+      },
+      "total_loss_summary": {
+        "first": 12.654386520385742,
+        "last": 12.799694061279297,
+        "min": 12.634716033935547,
+        "max": 13.030267715454102
+      },
+      "selected_indices_path": "outputs\\ablations\\distribution_metric\\debug\\mse\\selected_indices.npy",
+      "classifier_result_path": "outputs\\ablations\\distribution_metric\\debug\\mse\\classifier\\classifier_result.json",
+      "logs": {
+        "step": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "loss_total": [
+          12.654386520385742,
+          13.030267715454102,
+          12.634716033935547,
+          12.799694061279297
+        ],
+        "loss_main": [
+          4.245055970386602e-05,
+          0.00028072998975403607,
+          0.0014511306071653962,
+          0.0031883413903415203
+        ],
+        "loss_match": [
+          0.0,
+          1.0000002248489182e-06,
+          2.664722615008941e-06,
+          4.8784477257868275e-06
+        ],
+        "loss_graph": [
+          1.4887655973434448,
+          1.5042064189910889,
+          1.5201352834701538,
+          1.5377370119094849
+        ],
+        "loss_div": [
+          125.05467224121094,
+          128.795654296875,
+          124.81248474121094,
+          126.4272689819336
+        ]
+      }
+    },
+    {
+      "metric": "kl",
+      "final_accuracy": 0.0,
+      "selected_count": 26,
+      "main_loss_summary": {
+        "first": 9.274026524508372e-08,
+        "last": 7.032882422208786e-05,
+        "min": 9.274026524508372e-08,
+        "max": 9.120471077039838e-05
+      },
+      "total_loss_summary": {
+        "first": 12.654343605041504,
+        "last": 12.796951293945312,
+        "min": 12.633787155151367,
+        "max": 13.029630661010742
+      },
+      "selected_indices_path": "outputs\\ablations\\distribution_metric\\debug\\kl\\selected_indices.npy",
+      "classifier_result_path": "outputs\\ablations\\distribution_metric\\debug\\kl\\classifier\\classifier_result.json",
+      "logs": {
+        "step": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "loss_total": [
+          12.654343605041504,
+          13.029630661010742,
+          12.633787155151367,
+          12.796951293945312
+        ],
+        "loss_main": [
+          9.274026524508372e-08,
+          5.193251126911491e-06,
+          9.120471077039838e-05,
+          7.032882422208786e-05
+        ],
+        "loss_match": [
+          0.0,
+          1.0000002248489182e-06,
+          2.6652478481992148e-06,
+          4.878794698015554e-06
+        ],
+        "loss_graph": [
+          1.4887655973434448,
+          1.5042064189910889,
+          1.5201389789581299,
+          1.5377469062805176
+        ],
+        "loss_div": [
+          125.05467224121094,
+          128.7920379638672,
+          124.81678771972656,
+          126.43101501464844
+        ]
+      }
+    },
+    {
+      "metric": "ce",
+      "final_accuracy": 0.0,
+      "selected_count": 26,
+      "main_loss_summary": {
+        "first": 1.609437108039856,
+        "last": 2.772270441055298,
+        "min": 1.609437108039856,
+        "max": 2.7725419998168945
+      },
+      "total_loss_summary": {
+        "first": 14.26378059387207,
+        "last": 15.569151878356934,
+        "min": 14.26378059387207,
+        "max": 15.668670654296875
+      },
+      "selected_indices_path": "outputs\\ablations\\distribution_metric\\debug\\ce\\selected_indices.npy",
+      "classifier_result_path": "outputs\\ablations\\distribution_metric\\debug\\ce\\classifier\\classifier_result.json",
+      "logs": {
+        "step": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "loss_total": [
+          14.26378059387207,
+          15.668670654296875,
+          15.406237602233887,
+          15.569151878356934
+        ],
+        "loss_main": [
+          1.609437108039856,
+          2.639045238494873,
+          2.7725419998168945,
+          2.772270441055298
+        ],
+        "loss_match": [
+          0.0,
+          1.0000002248489182e-06,
+          2.6652478481992148e-06,
+          4.878794698015554e-06
+        ],
+        "loss_graph": [
+          1.4887655973434448,
+          1.5042064189910889,
+          1.5201389789581299,
+          1.5377469062805176
+        ],
+        "loss_div": [
+          125.05467224121094,
+          128.7920379638672,
+          124.81678771972656,
+          126.43101501464844
+        ]
+      }
+    },
+    {
+      "metric": "pdcfd",
+      "final_accuracy": 0.0,
+      "selected_count": 26,
+      "main_loss_summary": {
+        "first": 3.1179624784272164e-05,
+        "last": 0.0004520450020208955,
+        "min": 3.1179624784272164e-05,
+        "max": 0.0004520450020208955
+      },
+      "total_loss_summary": {
+        "first": 12.654375076293945,
+        "last": 12.796635627746582,
+        "min": 12.634175300598145,
+        "max": 13.0297212600708
+      },
+      "selected_indices_path": "outputs\\ablations\\distribution_metric\\debug\\pdcfd\\selected_indices.npy",
+      "classifier_result_path": "outputs\\ablations\\distribution_metric\\debug\\pdcfd\\classifier\\classifier_result.json",
+      "logs": {
+        "step": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "loss_total": [
+          12.654375076293945,
+          13.0297212600708,
+          12.634175300598145,
+          12.796635627746582
+        ],
+        "loss_main": [
+          3.1179624784272164e-05,
+          9.603818034520373e-05,
+          0.00037974060978740454,
+          0.0004520450020208955
+        ],
+        "loss_match": [
+          0.0,
+          1.0000002248489182e-06,
+          2.6652539872884518e-06,
+          4.878545041719917e-06
+        ],
+        "loss_graph": [
+          1.4887655973434448,
+          1.5042064189910889,
+          1.5201387405395508,
+          1.5377438068389893
+        ],
+        "loss_div": [
+          125.05467224121094,
+          128.7920379638672,
+          124.81778717041016,
+          126.42404174804688
+        ]
+      }
+    }
+  ]
+}

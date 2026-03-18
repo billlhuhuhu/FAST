@@ -1,0 +1,57 @@
+{
+  "metric": "ce",
+  "final_accuracy": 0.0,
+  "selected_count": 26,
+  "main_loss_summary": {
+    "first": 1.609437108039856,
+    "last": 2.772270441055298,
+    "min": 1.609437108039856,
+    "max": 2.7725419998168945
+  },
+  "total_loss_summary": {
+    "first": 14.26378059387207,
+    "last": 15.569151878356934,
+    "min": 14.26378059387207,
+    "max": 15.668670654296875
+  },
+  "selected_indices_path": "outputs\\ablations\\distribution_metric\\debug\\ce\\selected_indices.npy",
+  "classifier_result_path": "outputs\\ablations\\distribution_metric\\debug\\ce\\classifier\\classifier_result.json",
+  "logs": {
+    "step": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "loss_total": [
+      14.26378059387207,
+      15.668670654296875,
+      15.406237602233887,
+      15.569151878356934
+    ],
+    "loss_main": [
+      1.609437108039856,
+      2.639045238494873,
+      2.7725419998168945,
+      2.772270441055298
+    ],
+    "loss_match": [
+      0.0,
+      1.0000002248489182e-06,
+      2.6652478481992148e-06,
+      4.878794698015554e-06
+    ],
+    "loss_graph": [
+      1.4887655973434448,
+      1.5042064189910889,
+      1.5201389789581299,
+      1.5377469062805176
+    ],
+    "loss_div": [
+      125.05467224121094,
+      128.7920379638672,
+      124.81678771972656,
+      126.43101501464844
+    ]
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "metric": "pdcfd",
+  "final_accuracy": 0.0,
+  "selected_count": 26,
+  "main_loss_summary": {
+    "first": 3.1179624784272164e-05,
+    "last": 0.0004520450020208955,
+    "min": 3.1179624784272164e-05,
+    "max": 0.0004520450020208955
+  },
+  "total_loss_summary": {
+    "first": 12.654375076293945,
+    "last": 12.796635627746582,
+    "min": 12.634175300598145,
+    "max": 13.0297212600708
+  },
+  "selected_indices_path": "outputs\\ablations\\distribution_metric\\debug\\pdcfd\\selected_indices.npy",
+  "classifier_result_path": "outputs\\ablations\\distribution_metric\\debug\\pdcfd\\classifier\\classifier_result.json",
+  "logs": {
+    "step": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "loss_total": [
+      12.654375076293945,
+      13.0297212600708,
+      12.634175300598145,
+      12.796635627746582
+    ],
+    "loss_main": [
+      3.1179624784272164e-05,
+      9.603818034520373e-05,
+      0.00037974060978740454,
+      0.0004520450020208955
+    ],
+    "loss_match": [
+      0.0,
+      1.0000002248489182e-06,
+      2.6652539872884518e-06,
+      4.878545041719917e-06
+    ],
+    "loss_graph": [
+      1.4887655973434448,
+      1.5042064189910889,
+      1.5201387405395508,
+      1.5377438068389893
+    ],
+    "loss_div": [
+      125.05467224121094,
+      128.7920379638672,
+      124.81778717041016,
+      126.42404174804688
+    ]
+  }
+}

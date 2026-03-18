@@ -201,16 +201,57 @@ def _extract_degree_from_config(config: Dict[str, Any], N: int, device: torch.de
     return tensor
 
 
-def _build_frequency_library_from_config(V_full: Tensor, config: Dict[str, Any]) -> FrequencyLibrary:
-    """Create the frequency library for PDAS/PD-CFD."""
+def _extract_assignment_kwargs(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract assignment configuration while keeping backward compatibility."""
 
-    num_frequencies = int(config.get("num_frequencies", 64))
-    max_frequency_norm = float(config.get("max_frequency_norm", 8.0))
+    assignment_cfg = config.get("assignment", {})
+    return {
+        "mode": assignment_cfg.get("mode", "auto"),
+        "prune_topk": assignment_cfg.get("prune_topk", None),
+        "auto_threshold": int(assignment_cfg.get("auto_threshold", 20000)),
+        "large_cost_scale": float(assignment_cfg.get("large_cost_scale", 1e6)),
+        "eps": float(assignment_cfg.get("eps", 1e-8)),
+    }
+
+
+def _build_frequency_library_from_config(
+    V_full: Tensor,
+    Y_current: Optional[Tensor],
+    config: Dict[str, Any],
+) -> FrequencyLibrary:
+    """Create the AFL frequency library for PDAS/PD-CFD.
+
+    The function accepts either a flat config dictionary or a nested
+    ``config['sampling']`` dictionary and keeps the current pipeline compatible.
+    """
+
+    sampling_cfg = config.get("sampling", config)
+    num_frequencies = int(sampling_cfg.get("num_frequencies", 64))
+    max_frequency_norm = float(sampling_cfg.get("max_frequency_norm", 8.0))
+    band_ranges = sampling_cfg.get("band_ranges", None)
+    band_sample_counts = sampling_cfg.get("band_sample_counts", None)
+    if band_sample_counts is not None:
+        resolved_sum = int(sum(int(v) for v in band_sample_counts.values()))
+        if resolved_sum != num_frequencies:
+            band_sample_counts = None
+    candidate_scales = sampling_cfg.get("candidate_scales", None)
+    scaling_search_steps = sampling_cfg.get("scaling_search_steps", None)
+    lambda_p = float(sampling_cfg.get("lcf_lambda_p", sampling_cfg.get("lambda_p", 0.5)))
+    alpha = float(sampling_cfg.get("lcf_alpha", sampling_cfg.get("alpha", 0.5)))
+
     return build_anisotropic_frequency_library(
         feature_dim=int(V_full.shape[1]),
         num_frequencies=num_frequencies,
         max_norm=max_frequency_norm,
         device=V_full.device,
+        Y_ref=V_full,
+        Y_current=None if Y_current is None else Y_current.detach(),
+        band_ranges=band_ranges,
+        band_sample_counts=band_sample_counts,
+        candidate_scales=candidate_scales,
+        scaling_search_steps=scaling_search_steps,
+        lambda_p=lambda_p,
+        alpha=alpha,
     )
 
 
@@ -229,6 +270,11 @@ def _init_logs() -> Dict[str, List[Any]]:
         "matched_max": [],
         "matched_head": [],
         "num_freqs": [],
+        "tau_t": [],
+        "candidate_count": [],
+        "assignment_mode": [],
+        "assignment_build_time_sec": [],
+        "assignment_matching_time_sec": [],
     }
 
 
@@ -384,6 +430,8 @@ def optimize_coreset(
     device = V_full.device
     dtype = V_full.dtype
 
+    sampling_cfg = config.get("sampling", config)
+
     keep_ratio = config.get("keep_ratio", None)
     M = config.get("M", None)
     init_mode = config.get("init_mode", "random_subset")
@@ -393,8 +441,8 @@ def optimize_coreset(
     lambda_graph = float(config.get("lambda_graph", 0.1))
     lambda_div = float(config.get("lambda_div", 0.1))
     lambda_pdcfd = float(config.get("lambda_pdcfd", 1.0))
-    lambda_p = float(config.get("lambda_p", 1.0))
-    alpha = float(config.get("alpha", 1.0))
+    lambda_p = float(sampling_cfg.get("lambda_p", config.get("lambda_p", 1.0)))
+    alpha = float(sampling_cfg.get("alpha", config.get("alpha", 1.0)))
     rff_dim = int(config.get("rff_dim", 128))
     dpp_sigma = float(config.get("dpp_sigma", 1.0))
     dpp_delta = float(config.get("dpp_delta", 1e-6))
@@ -413,8 +461,10 @@ def optimize_coreset(
         raise AssertionError("Initialized Y has incompatible feature dimension")
 
     degree = _extract_degree_from_config(config=config, N=N, device=device, dtype=dtype)
+    assignment_kwargs = _extract_assignment_kwargs(config=config)
     laplacian = _coerce_laplacian_type(L_sym=L_sym, device=device, dtype=dtype)
-    frequency_library = _build_frequency_library_from_config(V_full=V_full, config=config)
+    rebuild_afl_each_iter = bool(sampling_cfg.get("rebuild_afl_each_iter", True))
+    frequency_library = _build_frequency_library_from_config(V_full=V_full, Y_current=Y.detach(), config=config)
 
     optimizer = torch.optim.Adam([Y], lr=lr)
     logs = _init_logs()
@@ -423,7 +473,7 @@ def optimize_coreset(
         if Y.ndim != 2 or Y.shape[1] != d:
             raise AssertionError("Y must keep shape [M, d] throughout optimization")
 
-        assignment = hungarian_match(Y=Y, V_full=V_full, degree=degree)
+        assignment = hungarian_match(Y=Y, V_full=V_full, degree=degree, **assignment_kwargs)
         matched_indices = assignment.matched_indices
         if matched_indices.shape[0] != Y.shape[0]:
             raise AssertionError("matched_indices must have shape [M]")
@@ -433,10 +483,16 @@ def optimize_coreset(
         loss_div_result = compute_dpp_loss(Y=Y, rff_dim=rff_dim, sigma=dpp_sigma, delta=dpp_delta)
         loss_div = loss_div_result.loss
 
+        if rebuild_afl_each_iter and step > 0:
+            frequency_library = _build_frequency_library_from_config(V_full=V_full, Y_current=Y.detach(), config=config)
+
         pdas_state = select_progressive_frequencies(
             library=frequency_library,
             step=step,
             total_steps=iterations,
+            Y_ref=V_full,
+            Y=Y,
+            config=sampling_cfg,
         )
         if pdas_state.selected_frequencies.ndim != 2 or pdas_state.selected_frequencies.shape[1] != d:
             raise AssertionError("Selected frequencies must have shape [K, d]")
@@ -473,8 +529,13 @@ def optimize_coreset(
         logs["matched_max"].append(int(matched_indices.max().detach().cpu().item()))
         logs["matched_head"].append(matched_indices[: min(5, matched_indices.shape[0])].detach().cpu().tolist())
         logs["num_freqs"].append(int(pdas_state.selected_frequencies.shape[0]))
+        logs["tau_t"].append(float(pdas_state.candidate_pool_stats.get("tau_t", 0.0)))
+        logs["candidate_count"].append(int(pdas_state.candidate_pool_stats.get("candidate_count", pdas_state.selected_frequencies.shape[0])))
+        logs["assignment_mode"].append(str(assignment.mode))
+        logs["assignment_build_time_sec"].append(float(assignment.candidate_stats.get("cost_build_time_sec", 0.0)))
+        logs["assignment_matching_time_sec"].append(float(assignment.candidate_stats.get("matching_time_sec", 0.0)))
 
-    final_assignment = hungarian_match(Y=Y.detach(), V_full=V_full, degree=degree)
+    final_assignment = hungarian_match(Y=Y.detach(), V_full=V_full, degree=degree, **assignment_kwargs)
     exported = export_selected_subset(
         matched_indices=final_assignment.matched_indices.detach(),
         Y=Y.detach(),

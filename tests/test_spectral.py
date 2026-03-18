@@ -23,6 +23,8 @@ class SpectralTestCase(unittest.TestCase):
         diff = L_sym - L_sym.T
         max_abs = 0.0 if diff.nnz == 0 else float(np.max(np.abs(diff.data)))
         self.assertLessEqual(max_abs, 1e-8)
+        self.assertFalse(np.isnan(L_sym.data).any())
+        self.assertFalse(np.isinf(L_sym.data).any())
 
     def test_spectral_embedding_shape(self) -> None:
         rng = np.random.default_rng(1)
@@ -33,6 +35,7 @@ class SpectralTestCase(unittest.TestCase):
         self.assertEqual(result.eigenvectors.shape[0], 24)
         self.assertEqual(result.eigenvectors.shape[1], 4)
         self.assertEqual(result.eigenvalues.shape[0], 4)
+        self.assertTrue(np.all(np.isfinite(result.eigenvectors)))
 
     def test_skip_zero_eigenvalues_logic(self) -> None:
         block1 = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64)

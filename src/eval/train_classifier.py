@@ -1,10 +1,23 @@
-"""Minimal downstream training and evaluation utilities for FAST."""
+"""Downstream training and evaluation utilities for FAST on CIFAR-10.
+
+This module remains intentionally lightweight, but it now exposes the core
+configuration surface needed to move beyond smoke tests toward the paper-style
+Section 4.1 evaluation loop:
+
+- configurable seed
+- configurable optimizer hyperparameters
+- configurable scheduler
+- configurable epochs / batch size
+- backbone selection (ResNet-18 / ResNet-50)
+- repeat-friendly result saving
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -12,6 +25,9 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 from torchvision.datasets import CIFAR10
+
+from src.utils.io import ensure_dir
+from src.utils.seed import set_seed
 
 
 CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
@@ -42,9 +58,15 @@ class ClassifierRunResult:
     """Outputs of training a classifier on a selected subset."""
 
     train_logs: List[Dict[str, Any]]
+    eval_logs: List[Dict[str, Any]]
     test_accuracy: float
     test_loss: float
+    best_accuracy: float
+    best_epoch: int
+    train_loss_summary: Dict[str, float]
+    config_snapshot: Dict[str, Any]
     selected_indices: Tensor
+    result_path: Optional[str]
 
 
 @dataclass
@@ -90,14 +112,7 @@ def get_cifar10_transforms() -> tuple[transforms.Compose, transforms.Compose]:
 
 
 def load_cifar10_datasets(root: str | Path = './data', download: bool = True) -> tuple[IndexedDataset, IndexedDataset]:
-    """Load CIFAR-10 train and test datasets with standard transforms.
-
-    Returns:
-        ``(train_dataset, test_dataset)`` where each wrapped dataset returns:
-        - image tensor with shape ``[3, 32, 32]``
-        - label tensor with shape ``[]``
-        - original index tensor with shape ``[]``
-    """
+    """Load CIFAR-10 train and test datasets with standard transforms."""
 
     train_transform, test_transform = get_cifar10_transforms()
     train_dataset = CIFAR10(root=str(root), train=True, transform=train_transform, download=download)
@@ -105,26 +120,41 @@ def load_cifar10_datasets(root: str | Path = './data', download: bool = True) ->
     return IndexedDataset(train_dataset), IndexedDataset(test_dataset)
 
 
-def build_resnet18(num_classes: int = 10) -> nn.Module:
-    """Create a CIFAR-friendly ResNet-18 classifier.
+def _adapt_resnet_for_cifar(model: nn.Module) -> nn.Module:
+    """Apply a CIFAR-friendly stem to a torchvision ResNet."""
 
-    The torchvision ResNet-18 stem is slightly adapted for 32x32 CIFAR input.
-    """
-
-    from torchvision.models import resnet18
-
-    model = resnet18(num_classes=num_classes)
     model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
     model.maxpool = nn.Identity()
     return model
 
 
-def build_backbone(backbone: str, num_classes: int = 10) -> nn.Module:
-    """Build the requested backbone. Currently only ``resnet18`` is supported."""
+def build_resnet18(num_classes: int = 10) -> nn.Module:
+    """Create a CIFAR-friendly ResNet-18 classifier."""
 
-    if backbone.lower() != 'resnet18':
-        raise ValueError("Only resnet18 is supported in the first version")
-    return build_resnet18(num_classes=num_classes)
+    from torchvision.models import resnet18
+
+    model = resnet18(num_classes=num_classes)
+    return _adapt_resnet_for_cifar(model)
+
+
+def build_resnet50(num_classes: int = 10) -> nn.Module:
+    """Create a CIFAR-friendly ResNet-50 classifier."""
+
+    from torchvision.models import resnet50
+
+    model = resnet50(num_classes=num_classes)
+    return _adapt_resnet_for_cifar(model)
+
+
+def build_backbone(backbone: str, num_classes: int = 10) -> nn.Module:
+    """Build the requested backbone."""
+
+    backbone_name = backbone.lower()
+    if backbone_name == 'resnet18':
+        return build_resnet18(num_classes=num_classes)
+    if backbone_name == 'resnet50':
+        return build_resnet50(num_classes=num_classes)
+    raise ValueError("Supported backbones are: resnet18, resnet50")
 
 
 def _to_long_tensor(indices: Sequence[int] | np.ndarray | Tensor) -> Tensor:
@@ -153,13 +183,6 @@ def build_subset_dataloader(
     return DataLoader(subset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
 
 
-def _compute_accuracy(logits: Tensor, labels: Tensor) -> float:
-    """Compute batch accuracy."""
-
-    preds = logits.argmax(dim=1)
-    return float((preds == labels).float().mean().item())
-
-
 def train_one_epoch(
     model: nn.Module,
     dataloader: DataLoader,
@@ -168,22 +191,7 @@ def train_one_epoch(
     epoch: int = 0,
     max_batches: Optional[int] = None,
 ) -> EpochTrainLog:
-    """Run one training epoch.
-
-    Args:
-        model:
-            Network to train.
-        dataloader:
-            Training dataloader yielding ``(image, label, index)``.
-        optimizer:
-            PyTorch optimizer.
-        device:
-            Single-device training target.
-        epoch:
-            Epoch number for logging.
-        max_batches:
-            Optional cap for lightweight smoke tests.
-    """
+    """Run one training epoch."""
 
     model.train()
     criterion = nn.CrossEntropyLoss()
@@ -247,54 +255,131 @@ def evaluate_classifier(
     return EvaluationLog(loss=avg_loss, accuracy=avg_acc, num_samples=total_samples)
 
 
+def build_optimizer(
+    model: nn.Module,
+    optimizer_name: str = 'sgd',
+    lr: float = 0.1,
+    momentum: float = 0.9,
+    weight_decay: float = 5e-4,
+) -> torch.optim.Optimizer:
+    """Build the requested optimizer from a minimal config surface."""
+
+    name = optimizer_name.lower()
+    if name == 'sgd':
+        return torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    if name == 'adam':
+        return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    raise ValueError('Supported optimizers are: sgd, adam')
+
+
+def build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    scheduler_name: str = 'none',
+    epochs: int = 200,
+    milestones: Optional[Sequence[int]] = None,
+    gamma: float = 0.1,
+) -> Optional[object]:
+    """Build a lightweight learning-rate scheduler."""
+
+    name = scheduler_name.lower()
+    if name == 'none':
+        return None
+    if name == 'multistep':
+        resolved_milestones = [100, 150] if milestones is None else [int(step) for step in milestones]
+        return torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=resolved_milestones, gamma=float(gamma))
+    if name == 'cosine':
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(int(epochs), 1))
+    raise ValueError('Supported schedulers are: none, multistep, cosine')
+
+
+def _build_result_snapshot(
+    backbone: str,
+    optimizer_name: str,
+    scheduler_name: str,
+    epochs: int,
+    batch_size: int,
+    lr: float,
+    momentum: float,
+    weight_decay: float,
+    seed: int,
+    device: str,
+    selected_count: int,
+    optimizer_config: Dict[str, Any],
+    scheduler_config: Dict[str, Any],
+    extra_config: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build a JSON-friendly training config snapshot."""
+
+    snapshot = {
+        'backbone': backbone,
+        'optimizer': optimizer_name,
+        'scheduler': scheduler_name,
+        'epochs': int(epochs),
+        'batch_size': int(batch_size),
+        'lr': float(lr),
+        'momentum': float(momentum),
+        'weight_decay': float(weight_decay),
+        'seed': int(seed),
+        'device': device,
+        'selected_count': int(selected_count),
+        'optimizer_config': optimizer_config,
+        'scheduler_config': scheduler_config,
+    }
+    if extra_config is not None:
+        snapshot['extra_config'] = extra_config
+    return snapshot
+
+
+def save_classifier_run_result(result: ClassifierRunResult, output_dir: str | Path) -> Path:
+    """Save classifier run artifacts to a directory."""
+
+    output_dir = ensure_dir(output_dir)
+    result_path = output_dir / 'classifier_result.json'
+    payload = {
+        'train_logs': result.train_logs,
+        'eval_logs': result.eval_logs,
+        'test_accuracy': result.test_accuracy,
+        'test_loss': result.test_loss,
+        'best_accuracy': result.best_accuracy,
+        'best_epoch': result.best_epoch,
+        'train_loss_summary': result.train_loss_summary,
+        'config_snapshot': result.config_snapshot,
+        'selected_count': int(result.selected_indices.shape[0]),
+    }
+    result_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding='utf-8')
+    np.save(output_dir / 'selected_indices.npy', result.selected_indices.detach().cpu().numpy().astype(np.int64))
+    return result_path
+
+
 def train_classifier_on_subset(
     selected_indices: Sequence[int] | np.ndarray | Tensor,
     backbone: str = 'resnet18',
     root: str | Path = './data',
     epochs: int = 1,
     batch_size: int = 64,
+    optimizer_name: str = 'sgd',
+    scheduler_name: str = 'none',
     lr: float = 0.01,
     weight_decay: float = 5e-4,
     momentum: float = 0.9,
+    scheduler_milestones: Optional[Sequence[int]] = None,
+    scheduler_gamma: float = 0.1,
+    seed: int = 42,
     device: Optional[str | torch.device] = None,
     download: bool = True,
     train_max_batches: Optional[int] = None,
     eval_max_batches: Optional[int] = None,
     num_workers: int = 0,
+    output_dir: Optional[str | Path] = None,
+    extra_config: Optional[Dict[str, Any]] = None,
 ) -> ClassifierRunResult:
-    """Train a classifier on a selected CIFAR-10 subset and evaluate on test.
+    """Train a classifier on a selected CIFAR-10 subset and evaluate on test."""
 
-    Args:
-        selected_indices:
-            1D subset indices into the CIFAR-10 train set.
-        backbone:
-            Backbone name. First version only supports ``resnet18``.
-        root:
-            Dataset root.
-        epochs:
-            Number of training epochs.
-        batch_size:
-            Batch size for train and test.
-        lr:
-            SGD learning rate.
-        weight_decay:
-            Optimizer weight decay.
-        momentum:
-            SGD momentum.
-        device:
-            Training device. Defaults to CUDA if available, else CPU.
-        download:
-            Whether torchvision may download the dataset.
-        train_max_batches:
-            Optional lightweight cap for smoke tests.
-        eval_max_batches:
-            Optional lightweight cap for smoke tests.
-        num_workers:
-            Dataloader workers.
-    """
-
+    set_seed(seed)
     selected_indices_tensor = _to_long_tensor(selected_indices)
     train_dataset, test_dataset = load_cifar10_datasets(root=root, download=download)
+    if selected_indices_tensor.numel() == 0:
+        raise ValueError('selected_indices must not be empty')
     if int(selected_indices_tensor.min().item()) < 0 or int(selected_indices_tensor.max().item()) >= len(train_dataset):
         raise ValueError('selected_indices are out of bounds for CIFAR-10 train set')
 
@@ -309,9 +394,54 @@ def train_classifier_on_subset(
 
     resolved_device = torch.device(device) if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = build_backbone(backbone=backbone, num_classes=10).to(resolved_device)
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    optimizer = build_optimizer(
+        model=model,
+        optimizer_name=optimizer_name,
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay,
+    )
+    scheduler = build_scheduler(
+        optimizer=optimizer,
+        scheduler_name=scheduler_name,
+        epochs=epochs,
+        milestones=scheduler_milestones,
+        gamma=scheduler_gamma,
+    )
+
+    optimizer_config = {
+        'name': optimizer_name,
+        'lr': float(lr),
+        'momentum': float(momentum),
+        'weight_decay': float(weight_decay),
+    }
+    scheduler_config = {
+        'name': scheduler_name,
+        'milestones': None if scheduler_milestones is None else [int(step) for step in scheduler_milestones],
+        'gamma': float(scheduler_gamma),
+    }
+    config_snapshot = _build_result_snapshot(
+        backbone=backbone,
+        optimizer_name=optimizer_name,
+        scheduler_name=scheduler_name,
+        epochs=epochs,
+        batch_size=batch_size,
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay,
+        seed=seed,
+        device=str(resolved_device),
+        selected_count=int(selected_indices_tensor.shape[0]),
+        optimizer_config=optimizer_config,
+        scheduler_config=scheduler_config,
+        extra_config=extra_config,
+    )
 
     train_logs: List[Dict[str, Any]] = []
+    eval_logs: List[Dict[str, Any]] = []
+    best_accuracy = -1.0
+    best_epoch = -1
+
     for epoch in range(epochs):
         epoch_log = train_one_epoch(
             model=model,
@@ -321,27 +451,49 @@ def train_classifier_on_subset(
             epoch=epoch,
             max_batches=train_max_batches,
         )
-        train_logs.append(
-            {
-                'epoch': epoch_log.epoch,
-                'train_loss': epoch_log.train_loss,
-                'train_accuracy': epoch_log.train_accuracy,
-                'num_samples': epoch_log.num_samples,
-            }
+        eval_log = evaluate_classifier(
+            model=model,
+            dataloader=test_loader,
+            device=resolved_device,
+            max_batches=eval_max_batches,
         )
+        current_lr = float(optimizer.param_groups[0]['lr'])
+        train_logs.append({**asdict(epoch_log), 'lr': current_lr})
+        eval_logs.append({'epoch': epoch, **asdict(eval_log), 'lr': current_lr})
 
-    eval_log = evaluate_classifier(
-        model=model,
-        dataloader=test_loader,
-        device=resolved_device,
-        max_batches=eval_max_batches,
-    )
-    return ClassifierRunResult(
+        if eval_log.accuracy > best_accuracy:
+            best_accuracy = float(eval_log.accuracy)
+            best_epoch = int(epoch)
+
+        if scheduler is not None:
+            scheduler.step()
+
+    train_losses = [float(item['train_loss']) for item in train_logs]
+    train_loss_summary = {
+        'first': float(train_losses[0]) if train_losses else 0.0,
+        'last': float(train_losses[-1]) if train_losses else 0.0,
+        'min': float(min(train_losses)) if train_losses else 0.0,
+        'max': float(max(train_losses)) if train_losses else 0.0,
+    }
+
+    result = ClassifierRunResult(
         train_logs=train_logs,
-        test_accuracy=eval_log.accuracy,
-        test_loss=eval_log.loss,
+        eval_logs=eval_logs,
+        test_accuracy=float(eval_logs[-1]['accuracy']) if eval_logs else 0.0,
+        test_loss=float(eval_logs[-1]['loss']) if eval_logs else 0.0,
+        best_accuracy=best_accuracy if best_accuracy >= 0.0 else 0.0,
+        best_epoch=best_epoch,
+        train_loss_summary=train_loss_summary,
+        config_snapshot=config_snapshot,
         selected_indices=selected_indices_tensor,
+        result_path=None,
     )
+
+    if output_dir is not None:
+        result_path = save_classifier_run_result(result, output_dir)
+        result.result_path = str(result_path)
+
+    return result
 
 
 def sample_random_subset(
@@ -365,28 +517,21 @@ def compare_subset_strategies(
     epochs: int = 1,
     batch_size: int = 64,
     seed: int = 0,
+    backbone: str = 'resnet18',
+    optimizer_name: str = 'sgd',
+    scheduler_name: str = 'none',
+    lr: float = 0.01,
+    momentum: float = 0.9,
+    weight_decay: float = 5e-4,
+    scheduler_milestones: Optional[Sequence[int]] = None,
+    scheduler_gamma: float = 0.1,
     device: Optional[str | torch.device] = None,
     download: bool = True,
     train_max_batches: Optional[int] = None,
     eval_max_batches: Optional[int] = None,
     num_workers: int = 0,
 ) -> StrategyComparisonResult:
-    """Compare `random` and `FAST` subset strategies on CIFAR-10.
-
-    Args:
-        keep_ratio:
-            Fraction of the train set to keep.
-        fast_selected_indices:
-            1D FAST-selected indices.
-        root:
-            Dataset root.
-        epochs:
-            Number of training epochs.
-        batch_size:
-            Batch size.
-        seed:
-            Random seed for the random baseline.
-    """
+    """Compare `random` and `FAST` subset strategies on CIFAR-10."""
 
     train_dataset, _test_dataset = load_cifar10_datasets(root=root, download=download)
     random_indices = sample_random_subset(train_size=len(train_dataset), keep_ratio=keep_ratio, seed=seed)
@@ -394,10 +539,18 @@ def compare_subset_strategies(
 
     random_result = train_classifier_on_subset(
         selected_indices=random_indices,
-        backbone='resnet18',
+        backbone=backbone,
         root=root,
         epochs=epochs,
         batch_size=batch_size,
+        optimizer_name=optimizer_name,
+        scheduler_name=scheduler_name,
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay,
+        scheduler_milestones=scheduler_milestones,
+        scheduler_gamma=scheduler_gamma,
+        seed=seed,
         device=device,
         download=download,
         train_max_batches=train_max_batches,
@@ -406,10 +559,18 @@ def compare_subset_strategies(
     )
     fast_result = train_classifier_on_subset(
         selected_indices=fast_indices,
-        backbone='resnet18',
+        backbone=backbone,
         root=root,
         epochs=epochs,
         batch_size=batch_size,
+        optimizer_name=optimizer_name,
+        scheduler_name=scheduler_name,
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay,
+        scheduler_milestones=scheduler_milestones,
+        scheduler_gamma=scheduler_gamma,
+        seed=seed,
         device=device,
         download=download,
         train_max_batches=train_max_batches,
@@ -420,10 +581,12 @@ def compare_subset_strategies(
     results = {
         'random': {
             'test_accuracy': random_result.test_accuracy,
+            'best_accuracy': random_result.best_accuracy,
             'test_loss': random_result.test_loss,
         },
         'FAST': {
             'test_accuracy': fast_result.test_accuracy,
+            'best_accuracy': fast_result.best_accuracy,
             'test_loss': fast_result.test_loss,
         },
     }

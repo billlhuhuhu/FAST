@@ -1,0 +1,53 @@
+{
+  "debug": true,
+  "method": "fast",
+  "seed": 42,
+  "run_index": 0,
+  "keep_ratio": 0.1,
+  "selected_count": 26,
+  "selected_indices_path": "outputs\\debug\\method_fast\\keep_0.100\\seed_42\\run_00\\selected_indices.npy",
+  "selection_stats": {
+    "target_M": 26,
+    "raw_match_count": 26,
+    "unique_before_fill": 26,
+    "filled_count": 0,
+    "final_unique_count": 26
+  },
+  "graph_stats": {
+    "num_nodes": 256,
+    "edge_count": 4024,
+    "connected_components": 1,
+    "degree_min": 6.4230483399305145,
+    "degree_max": 54.44834091377081,
+    "degree_mean": 15.555810597903118,
+    "degree_std": 8.020411414962535,
+    "mst_edge_count": 255,
+    "mst_reused_edge_count": 255,
+    "mst_added_edge_count": 0,
+    "mst_edge_usage_ratio": 0.0,
+    "fused_edge_count": 4024,
+    "scale_count": 3
+  },
+  "train_images_shape": [
+    256,
+    3,
+    32,
+    32
+  ],
+  "train_features_shape": [
+    256,
+    32
+  ],
+  "test_accuracy": 0.0625,
+  "best_accuracy": 0.0625,
+  "best_epoch": 0,
+  "test_loss": 58.630882263183594,
+  "train_loss_summary": {
+    "first": 4.722673416137695,
+    "last": 4.722673416137695,
+    "min": 4.722673416137695,
+    "max": 4.722673416137695
+  },
+  "classifier_result_path": "outputs\\debug\\method_fast\\keep_0.100\\seed_42\\run_00\\classifier\\classifier_result.json",
+  "run_dir": "outputs\\debug\\method_fast\\keep_0.100\\seed_42\\run_00"
+}
