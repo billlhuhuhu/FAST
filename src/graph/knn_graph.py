@@ -472,6 +472,32 @@ def fuse_multiscale_graphs(scale_graphs: Dict[int, KnnGraph]) -> sp.csr_matrix:
     return fused
 
 
+
+def _normalize_csr_for_csgraph(graph: sp.spmatrix) -> sp.csr_matrix:
+    """Normalize CSR dtypes for SciPy csgraph routines.
+
+    Some SciPy builds are strict about CSR index dtypes when calling graph
+    algorithms such as ``minimum_spanning_tree``. This helper makes the matrix
+    contiguous and casts indices/indptr to the integer dtype typically expected
+    by ``scipy.sparse.csgraph`` on Linux wheels.
+
+    Args:
+        graph:
+            Sparse matrix with shape ``[N, N]``.
+
+    Returns:
+        CSR matrix with ``float64`` data and normalized index arrays.
+    """
+
+    csr = graph.tocsr().astype(np.float64, copy=False)
+    csr.sort_indices()
+    csr.sum_duplicates()
+    csr.data = np.ascontiguousarray(csr.data, dtype=np.float64)
+    csr.indices = np.ascontiguousarray(csr.indices, dtype=np.int32)
+    csr.indptr = np.ascontiguousarray(csr.indptr, dtype=np.int32)
+    return csr
+
+
 def build_mst_graph(X: ArrayLike2D) -> sp.csr_matrix:
     """Build a symmetric MST graph from pairwise Euclidean distances.
 
@@ -486,7 +512,7 @@ def build_mst_graph(X: ArrayLike2D) -> sp.csr_matrix:
 
     X_np = to_numpy_2d(X)
     distances = pairwise_distances(X_np, metric="euclidean", n_jobs=1)
-    distance_graph = sp.csr_matrix(distances)
+    distance_graph = _normalize_csr_for_csgraph(sp.csr_matrix(distances, dtype=np.float64))
     mst = minimum_spanning_tree(distance_graph).tocsr()
     mst = mst + mst.T
     mst = mst.tocsr()
