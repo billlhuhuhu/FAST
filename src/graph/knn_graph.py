@@ -498,12 +498,69 @@ def _normalize_csr_for_csgraph(graph: sp.spmatrix) -> sp.csr_matrix:
     return csr
 
 
-def build_mst_graph(X: ArrayLike2D) -> sp.csr_matrix:
-    """Build a symmetric MST graph from pairwise Euclidean distances.
+def build_sparse_distance_graph(scale_graphs: Dict[int, KnnGraph]) -> sp.csr_matrix:
+    """Build a sparse symmetric distance graph from multi-scale kNN edges.
+
+    Args:
+        scale_graphs:
+            Mapping ``k -> KnnGraph``. Each graph contributes neighbor indices and
+            Euclidean distances with shape ``[N, k]``.
+
+    Returns:
+        Symmetric CSR distance graph with shape ``[N, N]``.
+    """
+
+    if not scale_graphs:
+        raise ValueError("scale_graphs must not be empty")
+
+    example_graph = next(iter(scale_graphs.values()))
+    num_nodes = int(example_graph.indices.shape[0])
+    row_parts: list[np.ndarray] = []
+    col_parts: list[np.ndarray] = []
+    data_parts: list[np.ndarray] = []
+
+    for graph in scale_graphs.values():
+        if graph.indices.shape != graph.distances.shape:
+            raise ValueError("graph.indices and graph.distances must share shape [N, k]")
+        row_ids = np.repeat(np.arange(num_nodes, dtype=np.int64), graph.indices.shape[1])
+        row_parts.append(row_ids)
+        col_parts.append(graph.indices.reshape(-1).astype(np.int64, copy=False))
+        data_parts.append(graph.distances.reshape(-1).astype(np.float64, copy=False))
+
+    rows = np.concatenate(row_parts, axis=0)
+    cols = np.concatenate(col_parts, axis=0)
+    data = np.concatenate(data_parts, axis=0)
+
+    sym_rows = np.concatenate([rows, cols], axis=0)
+    sym_cols = np.concatenate([cols, rows], axis=0)
+    sym_data = np.concatenate([data, data], axis=0)
+
+    sparse_graph = sp.coo_matrix((sym_data, (sym_rows, sym_cols)), shape=(num_nodes, num_nodes), dtype=np.float64)
+    sparse_graph = sparse_graph.tocsr()
+    sparse_graph.sum_duplicates()
+    sparse_graph.eliminate_zeros()
+    return sparse_graph
+
+
+def build_mst_graph(
+    X: ArrayLike2D,
+    scale_graphs: Dict[int, KnnGraph] | None = None,
+    dense_threshold: int = 4000,
+) -> sp.csr_matrix:
+    """Build a symmetric MST graph for connectivity enhancement.
+
+    For small datasets, this uses the exact dense pairwise-distance graph.
+    For larger datasets, it falls back to a sparse distance graph assembled from
+    already-computed multi-scale kNN neighborhoods to avoid ``O(N^2)`` memory.
 
     Args:
         X:
             Feature matrix with shape ``[N, p]``.
+        scale_graphs:
+            Optional multi-scale kNN graphs used to assemble a sparse distance
+            graph for large-scale runs.
+        dense_threshold:
+            Maximum node count for the exact dense MST path.
 
     Returns:
         Symmetric CSR sparse matrix with shape ``[N, N]`` whose nonzero entries
@@ -511,8 +568,15 @@ def build_mst_graph(X: ArrayLike2D) -> sp.csr_matrix:
     """
 
     X_np = to_numpy_2d(X)
-    distances = pairwise_distances(X_np, metric="euclidean", n_jobs=1)
-    distance_graph = _normalize_csr_for_csgraph(sp.csr_matrix(distances, dtype=np.float64))
+    num_nodes = int(X_np.shape[0])
+
+    if scale_graphs is not None and num_nodes > dense_threshold:
+        distance_graph = build_sparse_distance_graph(scale_graphs)
+        distance_graph = _normalize_csr_for_csgraph(distance_graph)
+    else:
+        distances = pairwise_distances(X_np, metric="euclidean", n_jobs=1)
+        distance_graph = _normalize_csr_for_csgraph(sp.csr_matrix(distances, dtype=np.float64))
+
     mst = minimum_spanning_tree(distance_graph).tocsr()
     mst = mst + mst.T
     mst = mst.tocsr()
@@ -527,7 +591,6 @@ def build_mst_graph(X: ArrayLike2D) -> sp.csr_matrix:
     mst.data = np.clip(mst.data, 0.0, 1.0)
     mst.eliminate_zeros()
     return mst
-
 
 def add_mst_edges(graph: sp.spmatrix, mst_graph: sp.spmatrix) -> sp.csr_matrix:
     """Merge MST edges into an existing symmetric graph.
@@ -568,7 +631,7 @@ def build_multiscale_knn_graph(X: ArrayLike2D, k_list: Sequence[int]) -> MultiSc
 
     scale_graphs = {int(k): build_single_scale_graph(X, int(k)) for k in k_list}
     fused_graph = fuse_multiscale_graphs(scale_graphs)
-    mst_graph = build_mst_graph(X)
+    mst_graph = build_mst_graph(X, scale_graphs=scale_graphs)
     combined_graph = add_mst_edges(fused_graph, mst_graph)
 
     stats = compute_graph_statistics(combined_graph, mst_graph=mst_graph)
