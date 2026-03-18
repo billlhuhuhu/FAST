@@ -197,6 +197,8 @@ def _select_indices_fast(runtime: Dict[str, Any], run_seed: int, run_dir: Path) 
         'dpp_delta': 1e-5,
         'sampling': sampling_cfg,
         'assignment': runtime['assignment_cfg'],
+        'verbose': True,
+        'log_every': 1 if runtime['train_num_samples'] is not None else 10,
     }
     opt_result = optimize_coreset(V_full=V_full, L_sym=spectral.laplacian, config=optimize_config)
     for idx in range(len(opt_result.logs['loss_total'])):

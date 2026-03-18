@@ -446,6 +446,8 @@ def optimize_coreset(
     rff_dim = int(config.get("rff_dim", 128))
     dpp_sigma = float(config.get("dpp_sigma", 1.0))
     dpp_delta = float(config.get("dpp_delta", 1e-6))
+    verbose = bool(config.get("verbose", False))
+    log_every = max(1, int(config.get("log_every", 10)))
 
     if iterations <= 0:
         raise ValueError("iterations must be positive")
@@ -534,6 +536,24 @@ def optimize_coreset(
         logs["assignment_mode"].append(str(assignment.mode))
         logs["assignment_build_time_sec"].append(float(assignment.candidate_stats.get("cost_build_time_sec", 0.0)))
         logs["assignment_matching_time_sec"].append(float(assignment.candidate_stats.get("matching_time_sec", 0.0)))
+
+        should_print = verbose and (step == 0 or (step + 1) % log_every == 0 or step == iterations - 1)
+        if should_print:
+            print(
+                "[FAST] iter={step}/{total} total={loss_total:.6f} match={loss_match:.6f} graph={loss_graph:.6f} div={loss_div:.6f} pdcfd={loss_pdcfd:.6f} tau={tau:.6f} cand={cand} assign={assign}".format(
+                    step=step + 1,
+                    total=iterations,
+                    loss_total=logs["loss_total"][-1],
+                    loss_match=logs["loss_match"][-1],
+                    loss_graph=logs["loss_graph"][-1],
+                    loss_div=logs["loss_div"][-1],
+                    loss_pdcfd=logs["loss_pdcfd"][-1],
+                    tau=logs["tau_t"][-1],
+                    cand=logs["candidate_count"][-1],
+                    assign=logs["assignment_mode"][-1],
+                ),
+                flush=True,
+            )
 
     final_assignment = hungarian_match(Y=Y.detach(), V_full=V_full, degree=degree, **assignment_kwargs)
     exported = export_selected_subset(
