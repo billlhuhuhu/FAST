@@ -144,7 +144,7 @@ def compute_knn_neighbors(X: ArrayLike2D, k: int) -> tuple[np.ndarray, np.ndarra
     X_np = to_numpy_2d(X)
     num_nodes = X_np.shape[0]
     effective_k = min(k + 1, num_nodes)
-    nbrs = NearestNeighbors(n_neighbors=effective_k, metric="euclidean")
+    nbrs = NearestNeighbors(n_neighbors=effective_k, metric="euclidean", n_jobs=1)
     nbrs.fit(X_np)
     distances, indices = nbrs.kneighbors(X_np, return_distance=True)
 
@@ -485,7 +485,7 @@ def build_mst_graph(X: ArrayLike2D) -> sp.csr_matrix:
     """
 
     X_np = to_numpy_2d(X)
-    distances = pairwise_distances(X_np, metric="euclidean")
+    distances = pairwise_distances(X_np, metric="euclidean", n_jobs=1)
     distance_graph = sp.csr_matrix(distances)
     mst = minimum_spanning_tree(distance_graph).tocsr()
     mst = mst + mst.T

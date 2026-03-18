@@ -1,5 +1,6 @@
 seed: 42
 device: cpu
+num_threads: 1
 output_dir: ./outputs
 
 data:
@@ -10,6 +11,8 @@ data:
   flatten: true
   pca_dim: 128
   manifold_dim: 32
+  train_num_samples: 5000
+  test_num_samples: 1000
 
 coreset:
   keep_ratio: 0.1

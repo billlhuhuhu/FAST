@@ -15,9 +15,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
+
+# Keep BLAS/OpenMP thread usage conservative before importing NumPy/sklearn users.
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('NUMEXPR_NUM_THREADS', '1')
+os.environ.setdefault('VECLIB_MAXIMUM_THREADS', '1')
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -84,11 +92,12 @@ def build_runtime_config(
         'weight_decay': float(eval_cfg.get('weight_decay', 5e-4)),
         'epochs': int(eval_cfg.get('epochs', 200)),
         'batch_size': int(eval_cfg.get('batch_size', 128)),
-        'train_num_samples': None,
-        'test_num_samples': None,
         'train_max_batches': None,
         'eval_max_batches': None,
         'download': True,
+        'num_threads': int(config.get('num_threads', 1)),
+        'train_num_samples': data_cfg.get('train_num_samples', None),
+        'test_num_samples': data_cfg.get('test_num_samples', None),
     }
 
     if runtime['method'] not in {'fast', 'random'}:
@@ -112,6 +121,24 @@ def build_runtime_config(
 
     return runtime
 
+
+
+
+def _configure_runtime_threads(num_threads: int) -> None:
+    """Apply conservative thread settings for BLAS/OpenMP and PyTorch."""
+
+    resolved = max(1, int(num_threads))
+    os.environ['OPENBLAS_NUM_THREADS'] = str(resolved)
+    os.environ['OMP_NUM_THREADS'] = str(resolved)
+    os.environ['MKL_NUM_THREADS'] = str(resolved)
+    os.environ['NUMEXPR_NUM_THREADS'] = str(resolved)
+    os.environ['VECLIB_MAXIMUM_THREADS'] = str(resolved)
+    torch.set_num_threads(resolved)
+    if hasattr(torch, 'set_num_interop_threads'):
+        try:
+            torch.set_num_interop_threads(max(1, min(resolved, 4)))
+        except RuntimeError:
+            pass
 
 def _format_keep_ratio(keep_ratio: float) -> str:
     return f'{keep_ratio:.3f}'
@@ -313,6 +340,7 @@ def run_pipeline(
 
     config = load_yaml(config_path)
     runtime = build_runtime_config(config, debug=debug, method=method, keep_ratio=keep_ratio, seed=seed, repeat=repeat)
+    _configure_runtime_threads(runtime['num_threads'])
 
     run_summaries: List[Dict[str, Any]] = []
     for run_index in range(runtime['repeat']):
