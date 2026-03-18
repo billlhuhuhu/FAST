@@ -3,26 +3,31 @@ device: cpu
 
 data:
   root: ./data
+  dataset_name: cifar10
   image_size: 32
   num_classes: 10
   flatten: true
+  pca_dim: 128
+  manifold_dim: 32
 
 coreset:
   keep_ratio: 0.1
   init_mode: random_subset
 
 graph:
-  k: 10
+  k_list: [5, 10, 20]
   sigma: 1.0
   normalized_laplacian: true
 
 sampling:
   num_frequencies: 64
-  schedule_steps: 100
+  pdas_frequencies_per_iter: 64
+  schedule_steps: 400
   max_frequency_norm: 8.0
 
 optimize:
-  steps: 5
+  steps: 400
+  iterations: 400
   lr: 0.001
   lambda_div: 0.1
   lambda_align: 1.0

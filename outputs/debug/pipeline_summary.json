@@ -1,0 +1,14 @@
+{
+  "debug": true,
+  "selected_count": 26,
+  "selected_indices_path": "outputs\\debug\\selected_indices.npy",
+  "test_accuracy": 0.0625,
+  "test_loss": 2.8028275966644287,
+  "export_stats": {
+    "target_M": 26,
+    "raw_match_count": 26,
+    "unique_before_fill": 26,
+    "filled_count": 0,
+    "final_unique_count": 26
+  }
+}
