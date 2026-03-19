@@ -1,4 +1,4 @@
-"""Lightweight FAST pipeline runner for CIFAR-10.
+﻿"""Lightweight FAST pipeline runner for CIFAR-10.
 
 This script keeps the project on a simple, configuration-driven path while
 supporting a paper-like evaluation loop with:
@@ -19,6 +19,8 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
+
+import numpy as np
 
 # Keep BLAS/OpenMP thread usage conservative before importing NumPy/sklearn users.
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
@@ -152,6 +154,15 @@ def _save_json(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding='utf-8')
 
 
+def _extract_graph_degree(graph_matrix: Any) -> np.ndarray:
+    """Extract a dense degree vector from a sparse adjacency matrix."""
+
+    degree = np.asarray(graph_matrix.sum(axis=1)).reshape(-1).astype(np.float32, copy=False)
+    if degree.ndim != 1:
+        raise ValueError('graph degree must be a 1D vector')
+    return degree
+
+
 def _select_indices_fast(runtime: Dict[str, Any], run_seed: int, run_dir: Path) -> Dict[str, Any]:
     """Run FAST selection and return selection artifacts."""
 
@@ -200,10 +211,23 @@ def _select_indices_fast(runtime: Dict[str, Any], run_seed: int, run_dir: Path) 
         'verbose': True,
         'log_every': 1 if runtime['train_num_samples'] is not None else 10,
     }
+    if bool(runtime['assignment_cfg'].get('use_degree', False)):
+        graph_degree = _extract_graph_degree(graph.combined_graph)
+        optimize_config['degree'] = graph_degree
+        print(
+            'assignment_degree=enabled degree_min={deg_min:.6f} degree_mean={deg_mean:.6f} degree_max={deg_max:.6f}'.format(
+                deg_min=float(graph_degree.min()),
+                deg_mean=float(graph_degree.mean()),
+                deg_max=float(graph_degree.max()),
+            )
+        )
+    else:
+        print('assignment_degree=disabled')
+
     opt_result = optimize_coreset(V_full=V_full, L_sym=spectral.laplacian, config=optimize_config)
     for idx in range(len(opt_result.logs['loss_total'])):
         print(
-            'iter={step} total={total:.6f} match={match:.6f} graph={graph_loss:.6f} div={div:.6f} pdcfd={pdcfd:.6f} tau={tau:.6f} cand={cand} assign={assign}'.format(
+            'iter={step} total={total:.6f} match={match:.6f} graph={graph_loss:.6f} div={div:.6f} pdcfd={pdcfd:.6f} tau={tau:.6f} cand={cand} assign={assign} degree={degree}'.format(
                 step=opt_result.logs['step'][idx],
                 total=opt_result.logs['loss_total'][idx],
                 match=opt_result.logs['loss_match'][idx],
@@ -213,6 +237,7 @@ def _select_indices_fast(runtime: Dict[str, Any], run_seed: int, run_dir: Path) 
                 tau=opt_result.logs['tau_t'][idx],
                 cand=opt_result.logs['candidate_count'][idx],
                 assign=opt_result.logs['assignment_mode'][idx],
+                degree=opt_result.logs['assignment_use_degree'][idx],
             )
         )
 
@@ -391,3 +416,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+

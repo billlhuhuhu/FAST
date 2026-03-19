@@ -1,4 +1,4 @@
-seed: 42
+﻿seed: 42
 device: cpu
 num_threads: 1
 output_dir: ./outputs
@@ -43,6 +43,7 @@ sampling:
   scaling_search_steps: 5
 
 assignment:
+  use_degree: true
   mode: auto
   prune_topk: 64
   auto_threshold: 20000
@@ -73,3 +74,4 @@ eval:
   weight_decay: 5.0e-4
   epochs: 200
   batch_size: 128
+

@@ -1,4 +1,4 @@
-"""Coreset initialization and first-pass FAST joint optimization."""
+﻿"""Coreset initialization and first-pass FAST joint optimization."""
 
 from __future__ import annotations
 
@@ -206,6 +206,7 @@ def _extract_assignment_kwargs(config: Dict[str, Any]) -> Dict[str, Any]:
 
     assignment_cfg = config.get("assignment", {})
     return {
+        "use_degree": bool(assignment_cfg.get("use_degree", False)),
         "mode": assignment_cfg.get("mode", "auto"),
         "prune_topk": assignment_cfg.get("prune_topk", None),
         "auto_threshold": int(assignment_cfg.get("auto_threshold", 20000)),
@@ -273,6 +274,7 @@ def _init_logs() -> Dict[str, List[Any]]:
         "tau_t": [],
         "candidate_count": [],
         "assignment_mode": [],
+        "assignment_use_degree": [],
         "assignment_build_time_sec": [],
         "assignment_matching_time_sec": [],
     }
@@ -464,6 +466,9 @@ def optimize_coreset(
 
     degree = _extract_degree_from_config(config=config, N=N, device=device, dtype=dtype)
     assignment_kwargs = _extract_assignment_kwargs(config=config)
+    use_degree = bool(assignment_kwargs.pop("use_degree", False))
+    if not use_degree:
+        degree = None
     laplacian = _coerce_laplacian_type(L_sym=L_sym, device=device, dtype=dtype)
     rebuild_afl_each_iter = bool(sampling_cfg.get("rebuild_afl_each_iter", True))
     frequency_library = _build_frequency_library_from_config(V_full=V_full, Y_current=Y.detach(), config=config)
@@ -534,13 +539,14 @@ def optimize_coreset(
         logs["tau_t"].append(float(pdas_state.candidate_pool_stats.get("tau_t", 0.0)))
         logs["candidate_count"].append(int(pdas_state.candidate_pool_stats.get("candidate_count", pdas_state.selected_frequencies.shape[0])))
         logs["assignment_mode"].append(str(assignment.mode))
+        logs["assignment_use_degree"].append('on' if use_degree and degree is not None else 'off')
         logs["assignment_build_time_sec"].append(float(assignment.candidate_stats.get("cost_build_time_sec", 0.0)))
         logs["assignment_matching_time_sec"].append(float(assignment.candidate_stats.get("matching_time_sec", 0.0)))
 
         should_print = verbose and (step == 0 or (step + 1) % log_every == 0 or step == iterations - 1)
         if should_print:
             print(
-                "[FAST] iter={step}/{total} total={loss_total:.6f} match={loss_match:.6f} graph={loss_graph:.6f} div={loss_div:.6f} pdcfd={loss_pdcfd:.6f} tau={tau:.6f} cand={cand} assign={assign}".format(
+                "[FAST] iter={step}/{total} total={loss_total:.6f} match={loss_match:.6f} graph={loss_graph:.6f} div={loss_div:.6f} pdcfd={loss_pdcfd:.6f} tau={tau:.6f} cand={cand} assign={assign} degree={degree_flag}".format(
                     step=step + 1,
                     total=iterations,
                     loss_total=logs["loss_total"][-1],
@@ -551,6 +557,7 @@ def optimize_coreset(
                     tau=logs["tau_t"][-1],
                     cand=logs["candidate_count"][-1],
                     assign=logs["assignment_mode"][-1],
+                    degree_flag=logs["assignment_use_degree"][-1],
                 ),
                 flush=True,
             )
@@ -569,3 +576,6 @@ def optimize_coreset(
         export_stats=exported.stats,
         logs=logs,
     )
+
+
+
